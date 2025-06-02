@@ -1,69 +1,144 @@
 import streamlit as st
-from transformers import pipeline
-from googletrans import Translator
-from gtts import gTTS
-import tempfile
+import json
 import os
+from dotenv import load_dotenv
 
-st.set_page_config(page_title="Quiz & Summary Generator", layout="centered")
+load_dotenv() #Load all the environment variables from .env file
 
-summarizer = pipeline("summarization")
-qa_pipeline = pipeline("question-answering")
-translator = Translator()
 
-st.title("Paragraph Quiz & Summary Generator")
+from openai import OpenAI
+OpenAI.api_key=os.getenv("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")
+client = OpenAI()
 
-paragraph = st.text_area("Enter a paragraph:", height=300)
+@st.cache_data
+def fetch_questions(text_content, quiz_level):
 
-lang_map = {
-    "English": "en",
-    "Hindi": "hi",
-    "Tamil": "ta",
-    "Telugu": "te",
-    "Bengali": "bn",
-    "Marathi": "mr",
-    "Kannada": "kn",
-    "Gujarati": "gu",
-    "Malayalam": "ml",
-    "Punjabi": "pa",
-    "Urdu": "ur"
-}
+    RESPONSE_JSON = {
+      "mcqs" : [
+        {
+            "mcq": "multiple choice question1",
+            "options": {
+                "a": "choice here1",
+                "b": "choice here2",
+                "c": "choice here3",
+                "d": "choice here4",
+            },
+            "correct": "correct choice option in the form of a, b, c or d",
+        },
+        {
+            "mcq": "multiple choice question",
+            "options": {
+                "a": "choice here",
+                "b": "choice here",
+                "c": "choice here",
+                "d": "choice here",
+            },
+            "correct": "correct choice option in the form of a, b, c or d",
+        },
+        {
+            "mcq": "multiple choice question",
+            "options": {
+                "a": "choice here",
+                "b": "choice here",
+                "c": "choice here",
+                "d": "choice here",
+            },
+            "correct": "correct choice option in the form of a, b, c or d",
+        }
+      ]
+    }
 
-target_lang = st.selectbox("Choose output language for summary and speech:", list(lang_map.keys()))
-language_code = lang_map[target_lang]
+    PROMPT_TEMPLATE="""
+    Text: {text_content}
+    You are an expert in generating MCQ type quiz on the basis of provided content. 
+    Given the above text, create a quiz of 3 multiple choice questions keeping difficulty level as {quiz_level}. 
+    Make sure the questions are not repeated and check all the questions to be conforming the text as well.
+    Make sure to format your response like RESPONSE_JSON below and use it as a guide.
+    Ensure to make an array of 3 MCQs referring the following response json.
+    Here is the RESPONSE_JSON: 
 
-def extract_keywords(text, num=3):
-    words = list(set(text.split()))
-    return words[:num]
+    {RESPONSE_JSON}
 
-if st.button("Generate Quiz and Summary"):
-    if not paragraph.strip():
-        st.warning("Please enter a paragraph.")
-    else:
-        with st.spinner("Summarizing..."):
-            summary = summarizer(paragraph, max_length=150, min_length=40, do_sample=False)[0]["summary_text"]
+    """
 
-        with st.spinner("Translating summary..."):
-            translated = translator.translate(summary, dest=language_code).text
-            bullet_points = [f"- {line.strip()}" for line in translated.split(". ") if line.strip()]
+    formatted_template = PROMPT_TEMPLATE.format(text_content=text_content, quiz_level=quiz_level, RESPONSE_JSON=RESPONSE_JSON)
 
-        st.subheader("Summary in Bullet Points")
-        for point in bullet_points:
-            st.markdown(point)
+    #Make API request
+    response = client.chat.completions.create(model="gpt-3.5-turbo",
+      messages=[
+          {
+              "role": "user",
+              "content" : formatted_template
+          }
+      ],
+      temperature=0.3,
+      max_tokens=1000,
+      top_p=1,
+      frequency_penalty=0,
+      presence_penalty=0
+    )
 
-        with st.spinner("Generating quiz questions..."):
-            keywords = extract_keywords(paragraph)
-            st.subheader("Quiz Questions and Answers")
-            for i, keyword in enumerate(keywords):
-                question = f"What is {keyword}?"
-                answer = qa_pipeline(question=question, context=paragraph)["answer"]
-                st.markdown(f"*Q{i+1}: {question}*")
-                st.markdown(f"*Answer:* {answer}")
+    # Extract response JSON
+    extracted_response = response.choices[0].message.content
 
-        with st.spinner("Generating speech..."):
-            tts = gTTS(text="\n".join(bullet_points), lang=language_code)
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as fp:
-                tts.save(fp.name)
-                st.audio(fp.name, format="audio/mp3")
-                os.unlink(fp.name)
+    print(extracted_response)
 
+    return json.loads(extracted_response).get("mcqs", [])
+
+
+def main():
+    
+    st.title("Quiz Generator App")
+
+    # Text input for user to paste content
+    text_content = st.text_area("Paste the text content here:")
+
+    # Dropdown for selecting quiz level
+    quiz_level = st.selectbox("Select quiz level:", ["Easy", "Medium", "Hard"])
+
+    # Convert quiz level to lower casing
+    quiz_level_lower = quiz_level.lower()
+
+    # Initialize session_state
+    session_state = st.session_state
+
+    # Check if quiz_generated flag exists in session_state, if not initialize it
+    if 'quiz_generated' not in session_state:
+        session_state.quiz_generated = False
+
+    # Track if Generate Quiz button is clicked
+    if not session_state.quiz_generated:
+        session_state.quiz_generated = st.button("Generate Quiz")
+
+    if session_state.quiz_generated:
+		# Define questions and options
+        questions = fetch_questions(text_content=text_content, quiz_level=quiz_level_lower)
+
+        # Display questions and radio buttons
+        selected_options = []
+        correct_answers = []
+        for question in questions:
+            options = list(question["options"].values())
+            selected_option = st.radio(question["mcq"], options, index=None)
+            selected_options.append(selected_option)
+            correct_answers.append(question["options"][question["correct"]])
+
+        # Submit button
+        if st.button("Submit"):
+            # Display selected options
+            marks = 0
+            st.header("Quiz Result:")
+            for i, question in enumerate(questions):
+                    selected_option = selected_options[i]
+                    correct_option = correct_answers[i]
+                    st.subheader(f"{question['mcq']}")
+                    st.write(f"You selected: {selected_option}")
+                    st.write(f"Correct answer: {correct_option}")
+                    if selected_option == correct_option:
+                        marks += 1
+            st.subheader(f"You scored {marks} out of {len(questions)}")
+
+
+
+if __name__ == "__main__":
+    main()

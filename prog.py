@@ -1,55 +1,69 @@
 import streamlit as st
-import re
-import random
+from transformers import pipeline
+from googletrans import Translator
+from gtts import gTTS
+import tempfile
+import os
 
-st.title("Quiz Question Generator")
+st.set_page_config(page_title="Quiz & Summary Generator", layout="centered")
 
-# Text input or upload
-uploaded_file = st.file_uploader("Upload a text file", type=["txt"])
-text_input = st.text_area("Or paste your text here:", height=250)
+summarizer = pipeline("summarization")
+qa_pipeline = pipeline("question-answering")
+translator = Translator()
 
-def generate_quiz_questions(text, num_questions=5):
-    sentences = re.split(r'(?<=[.!?]) +', text)
-    questions = []
+st.title("Paragraph Quiz & Summary Generator")
 
-    for sentence in sentences:
-        words = [word for word in re.findall(r'\b\w+\b', sentence) if len(word) > 3]
-        if words:
-            chosen_word = random.choice(words)
-            question = sentence.replace(chosen_word, "_____", 1)
-            correct_answer = chosen_word
-            questions.append((question, correct_answer))
+paragraph = st.text_area("Enter a paragraph:", height=300)
 
-        if len(questions) >= num_questions:
-            break
+lang_map = {
+    "English": "en",
+    "Hindi": "hi",
+    "Tamil": "ta",
+    "Telugu": "te",
+    "Bengali": "bn",
+    "Marathi": "mr",
+    "Kannada": "kn",
+    "Gujarati": "gu",
+    "Malayalam": "ml",
+    "Punjabi": "pa",
+    "Urdu": "ur"
+}
 
-    return questions
+target_lang = st.selectbox("Choose output language for summary and speech:", list(lang_map.keys()))
+language_code = lang_map[target_lang]
 
-# Load text from file or input
-main_text = ""
-if uploaded_file:
-    main_text = uploaded_file.read().decode("utf-8")
-elif text_input:
-    main_text = text_input
+def extract_keywords(text, num=3):
+    words = list(set(text.split()))
+    return words[:num]
 
-if main_text:
-    st.subheader("Loaded Text Preview")
-    st.text(main_text[:800] + ("..." if len(main_text) > 800 else ""))
+if st.button("Generate Quiz and Summary"):
+    if not paragraph.strip():
+        st.warning("Please enter a paragraph.")
+    else:
+        with st.spinner("Summarizing..."):
+            summary = summarizer(paragraph, max_length=150, min_length=40, do_sample=False)[0]["summary_text"]
 
-    num_q = st.slider("Number of quiz questions", min_value=1, max_value=10, value=5)
-    
-    if st.button("Generate Quiz Questions"):
-        quiz = generate_quiz_questions(main_text, num_q)
-        st.subheader("Quiz Questions")
+        with st.spinner("Translating summary..."):
+            translated = translator.translate(summary, dest=language_code).text
+            bullet_points = [f"- {line.strip()}" for line in translated.split(". ") if line.strip()]
 
-        quiz_text = ""
-        for i, (q, a) in enumerate(quiz, 1):
-            st.markdown(f"**Q{i}:** {q}")
-            with st.expander("Show Answer"):
-                st.write(f"✅ {a}")
-            quiz_text += f"Q{i}: {q}\nA: {a}\n\n"
+        st.subheader("Summary in Bullet Points")
+        for point in bullet_points:
+            st.markdown(point)
 
-        st.download_button("Download Quiz as Text", quiz_text, file_name="quiz_questions.txt")
-else:
-    st.info("Please upload a text file or paste your text to generate quiz questions.")
+        with st.spinner("Generating quiz questions..."):
+            keywords = extract_keywords(paragraph)
+            st.subheader("Quiz Questions and Answers")
+            for i, keyword in enumerate(keywords):
+                question = f"What is {keyword}?"
+                answer = qa_pipeline(question=question, context=paragraph)["answer"]
+                st.markdown(f"*Q{i+1}: {question}*")
+                st.markdown(f"*Answer:* {answer}")
+
+        with st.spinner("Generating speech..."):
+            tts = gTTS(text="\n".join(bullet_points), lang=language_code)
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as fp:
+                tts.save(fp.name)
+                st.audio(fp.name, format="audio/mp3")
+                os.unlink(fp.name)
 

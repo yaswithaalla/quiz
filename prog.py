@@ -6,9 +6,12 @@ from dotenv import load_dotenv
 load_dotenv() #Load all the environment variables from .env file
 
 
+
+
 from openai import OpenAI
 OpenAI.api_key=os.getenv("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")
-client = OpenAI()
+client = OpenAI(api_key=os.getenv("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"))
+
 
 @st.cache_data
 def fetch_questions(text_content, quiz_level):
